@@ -128,7 +128,7 @@
     var t = themeById(id) || THEMES[0];
     CURRENT = t;
     var root = document.documentElement;
-    var vars = ['--accent', '--accent-soft', '--ut-deep', '--ut-glow', '--ut-tint', '--ut-img'];
+    var vars = ['--accent', '--accent-soft', '--ut-deep', '--ut-soft', '--ut-glow', '--ut-tint', '--ut-img'];
     for (var i = 0; i < vars.length; i++) root.style.removeProperty(vars[i]);
     if (t.id === 'classic') {
       root.removeAttribute('data-ut');
@@ -141,6 +141,7 @@
       root.style.setProperty('--accent', t.accent);
       root.style.setProperty('--accent-soft', t.soft);
       root.style.setProperty('--ut-deep', t.deep);
+      root.style.setProperty('--ut-soft', t.soft);
       root.style.setProperty('--ut-glow', t.glow);
       root.style.setProperty('--ut-tint', t.tint);
       root.style.setProperty('--ut-img', 'url("' + t.img + '")');

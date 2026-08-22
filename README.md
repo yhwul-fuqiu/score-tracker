@@ -15,6 +15,7 @@
 - 反馈处理状态与 Study Planner 对齐：`已收到 → 处理中 → 已计划 → 已解决 → 已关闭`
 - 新提交默认显示「已收到」；管理员首次回复后自动进入「处理中」；已解决/已关闭后用户继续追问会自动重新进入「处理中」
 - `/mg` 私有管理员后台：访问分析、实时在线、用户深度、访客、反馈管理和安全原始数据视图
+- 梦想大学主题：选择梦想大学后，全站换用该校校色、校训与校园风景（10 所高校可选，偏好保存在本地，见 `university-theme.js` 与 `assets/campuses/`）
 
 ## Supabase 表
 
@@ -34,7 +35,7 @@
 
 纯静态 HTML/CSS/JavaScript，无构建依赖，可直接部署到 Vercel。
 
-入口 `index.html` 依次加载 `compat.js`、`request-budget-v24.js`、`telemetry-feedback.js`、`feedback-statuses.js` 与 `app.js`。`app.js` 由历史版本文件 app-v3 ~ app-v27 按原加载顺序合并而成（纯合并、逻辑不变），文件边界以 `/* ===== 文件名 ===== */` 注释分隔。
+入口 `index.html` 依次加载 `compat.js`、`request-budget-v24.js`、`telemetry-feedback.js`、`feedback-statuses.js`、`app.js` 与 `university-theme.js`。`app.js` 由历史版本文件 app-v3 ~ app-v27 按原加载顺序合并而成（纯合并、逻辑不变），文件边界以 `/* ===== 文件名 ===== */` 注释分隔。`university-theme.js` 为梦想大学主题模块，通过 CSS 变量与 DOM 注入实现，不改动 `app.js` 的既有逻辑。
 
 ## 协作
 

@@ -33,3 +33,10 @@
 ## 前端
 
 纯静态 HTML/CSS/JavaScript，无构建依赖，可直接部署到 Vercel。
+
+入口 `index.html` 依次加载 `compat.js`、`request-budget-v24.js`、`telemetry-feedback.js`、`feedback-statuses.js` 与 `app.js`。`app.js` 由历史版本文件 app-v3 ~ app-v27 按原加载顺序合并而成（纯合并、逻辑不变），文件边界以 `/* ===== 文件名 ===== */` 注释分隔。
+
+## 协作
+
+- 产品路线见 [ROADMAP.md](ROADMAP.md)，协作规范见 [CONTRIBUTING.md](CONTRIBUTING.md)
+- main 分支受保护：改动一律走 Pull Request，经审查后合并

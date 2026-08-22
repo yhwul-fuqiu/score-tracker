@@ -44,7 +44,17 @@
     style.id = 'university-theme-style';
     style.textContent = `
       /* ---- 主题变量消费（仅在选择大学后生效） ---- */
-      html[data-ut] body{background:radial-gradient(circle at 8% 0%,var(--ut-tint) 0,transparent 30%),radial-gradient(circle at 92% 8%,var(--ut-soft) 0,transparent 26%),var(--bg)}
+      /* 所有内页底色：校色光斑 + 白色薄纱遮罩 + 校园淡彩插画（全站生效，卡片仍为净白） */
+      html[data-ut] body{
+        background:
+          radial-gradient(circle at 8% 0%,var(--ut-soft) 0,transparent 30%),
+          radial-gradient(circle at 92% 8%,var(--ut-tint) 0,transparent 26%),
+          linear-gradient(rgba(253,254,255,.86),rgba(253,254,255,.94)),
+          var(--ut-img);
+        background-size:auto,auto,cover,cover;
+        background-position:0 0,0 0,center,center;
+        background-repeat:no-repeat;
+      }
       html[data-ut] .logo{background:linear-gradient(145deg,var(--ut-deep),var(--accent))}
       html[data-ut] .splash .brand-mark{background:linear-gradient(145deg,var(--ut-deep),var(--accent))}
       html[data-ut] .hero-main{background:linear-gradient(145deg,rgba(255,255,255,.95),var(--ut-tint))}

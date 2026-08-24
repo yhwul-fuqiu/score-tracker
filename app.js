@@ -5248,3 +5248,382 @@ saveExam=async function saveExamV21(id,modal){
   syncVersionV27();
 })();
 ;
+/* ===== app-v28.js ===== */
+// app-v28 / product v3.2: 数据安全与排名体验，四项改进——
+// 1) 删除保护：删除考试前自动备份到本机回收站（最多 10 条），删除后 8 秒内可「撤销」，
+//    账号页提供回收站卡片，随时恢复误删的整场考试（含全部成绩与排名）。
+// 2) 市级排名：考试弹窗新增「市级排名」卡片与每科市排行；趋势图/雷达图口径按钮新增「市排」；
+//    记录页总分徽章显示市排。数据字段：total_city_rank / total_city_participants / cityRank / cityParticipants。
+// 3) 选科省略：账号页可设定「我的选科」，敲定后首页趋势科目按钮只保留所选科目
+//    （附「＋其余科目」临时展开，一键恢复全部）。
+// 4) 排名优先：最近两场考试有排名数据时，首页「较上次」优先展示排名变化（↑/↓ 名），
+//    分数变化退居其次；无排名数据时保持原分数展示。
+(function(){
+  var PRODUCT_VERSION_V28='v3.2';
+  var TRASH_KEY_V28='st_trash_v28';
+  var SEL_KEY_V28='st_selected_subjects_v28';
+  var SHOW_ALL_V28=false; // 会话内临时显示全部科目
+
+  function syncVersionV28(){
+    var meta=document.querySelector('meta[name="application-version"]');
+    if(meta)meta.setAttribute('content',PRODUCT_VERSION_V28);
+    var footer=document.getElementById('app-version-v17');
+    if(footer)footer.textContent='Score Tracker · '+PRODUCT_VERSION_V28;
+  }
+
+  // ---------- styles ----------
+  if(typeof document!=='undefined'&&!document.getElementById('app-v28-style')){
+    var styleV28=document.createElement('style');
+    styleV28.id='app-v28-style';
+    styleV28.textContent=`
+      .v28-undo{position:fixed;left:50%;transform:translateX(-50%);bottom:max(96px,calc(env(safe-area-inset-bottom) + 84px));z-index:90;display:flex;align-items:center;gap:14px;background:#1d2536;color:#fff;border-radius:14px;padding:12px 16px;font-size:13px;box-shadow:0 14px 40px rgba(20,28,46,.35);animation:v28In .2s ease}
+      .v28-undo button{border:1px solid rgba(255,255,255,.45);background:rgba(255,255,255,.14);color:#fff;border-radius:999px;padding:6px 13px;font-size:12px;font-weight:700;cursor:pointer}
+      .v28-undo button:hover{background:rgba(255,255,255,.26)}
+      @keyframes v28In{from{opacity:0;transform:translateX(-50%) translateY(8px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+      .v28-card{margin-top:18px;padding:24px}
+      .v28-sub-list{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+      .v28-sub-list button{border:1px solid var(--line);background:#fff;color:var(--text);border-radius:999px;padding:8px 13px;font-size:12.5px;font-weight:600;cursor:pointer}
+      .v28-sub-list button.on{background:var(--accent-soft,var(--accent,#5d72e8));border-color:var(--accent,#5d72e8);color:var(--accent,#5d72e8)}
+      .v28-note{font-size:11.5px;color:var(--muted,#788392);margin-top:10px;line-height:1.6}
+      .v28-trash-item{display:flex;align-items:center;gap:12px;padding:11px 12px;border:1px solid var(--line);border-radius:13px;margin-top:10px;background:#fff}
+      .v28-trash-item b{font-size:13.5px;display:block}
+      .v28-trash-item span{font-size:11px;color:var(--muted,#788392);display:block;margin-top:2px}
+      .v28-trash-item .v28-trash-btns{margin-left:auto;display:flex;gap:7px;flex:0 0 auto}
+      .v28-trash-item .v28-trash-btns button{border-radius:999px;padding:6px 12px;font-size:11.5px;font-weight:650;cursor:pointer}
+      .v28-restore{border:1px solid var(--green,#32a77a);color:var(--green,#32a77a);background:#fff}
+      .v28-purge{border:1px solid var(--line);color:var(--muted,#788392);background:#fff}
+      .v28-actions{display:flex;gap:9px;margin-top:14px;flex-wrap:wrap}
+    `;
+    document.head.appendChild(styleV28);
+  }
+
+  // ---------- 1. 市排口径 ----------
+  var rankInfoByScopeBeforeV28=rankInfoByScopeV16;
+  rankInfoByScopeV16=function rankInfoByScopeV28(exam,subject,scope){
+    if(scope==='city'){
+      if(!exam)return{rank:null,participants:null,performance:null};
+      if(subject==='总分'){
+        var tr=num(exam.total_city_rank),tp=num(exam.total_city_participants);
+        return{rank:tr,participants:tp,performance:rankPerformanceV7(tr,tp)};
+      }
+      var row=(exam.scores&&exam.scores[subject])||{};
+      var cr=num(row.cityRank),cp=num(row.cityParticipants);
+      if(cp===null)cp=num(exam.total_city_participants);
+      return{rank:cr,participants:cp,performance:rankPerformanceV7(cr,cp)};
+    }
+    return rankInfoByScopeBeforeV28(exam,subject,scope);
+  };
+  var rankScopeLabelBeforeV28=rankScopeLabelV16;
+  rankScopeLabelV16=function(scope){return scope==='city'?'市排':rankScopeLabelBeforeV28(scope);};
+  var rankScopeLongLabelBeforeV28=rankScopeLongLabelV16;
+  rankScopeLongLabelV16=function(scope){return scope==='city'?'市级排名':rankScopeLongLabelBeforeV28(scope);};
+
+  // ---------- 2. 首页：市排按钮 + 排名优先 pill ----------
+  function rankDeltaV28(){
+    var exams=(state.exams||[]).filter(function(e){return !e.is_hidden;}).slice().sort(function(a,b){return String(a.exam_date).localeCompare(String(b.exam_date));});
+    var scopes=['year','class','city'];
+    for(var i=0;i<scopes.length;i++){
+      var lastRank=null,prevRank=null,lastIdx=-1;
+      for(var j=exams.length-1;j>=0;j--){
+        var info=rankInfoByScopeV16(exams[j],'总分',scopes[i]);
+        if(info.rank!==null){
+          if(lastRank===null){lastRank=info.rank;lastIdx=j;}
+          else if(j<lastIdx){prevRank=info.rank;break;}
+        }
+      }
+      if(lastRank!==null&&prevRank!==null){
+        var d=prevRank-lastRank; // 负数=名次前进
+        return{scope:scopes[i],delta:d,label:rankScopeLabelV16(scopes[i])};
+      }
+    }
+    return null;
+  }
+
+  var homeHtmlBeforeV28=homeHtml;
+  homeHtml=function homeHtmlV28(){
+    var html=homeHtmlBeforeV28();
+    var isRank=state.trendMetric==='rank_raw'||state.trendMetric==='rank';
+    try{
+      html=html.replace('data-trend-scope-v16="class">班排</button>',
+        'data-trend-scope-v16="class">班排</button><button class="metric-btn-v7 '+(isRank&&state.rankScopeV16==='city'?'active':'')+'" data-trend-scope-v16="city">市排</button>');
+      html=html.replace('data-radar-scope-v16="class">班排</button>',
+        'data-radar-scope-v16="class">班排</button><button class="chip '+(isRank&&state.rankScopeV16==='city'?'active':'')+'" data-radar-scope-v16="city">市排</button>');
+    }catch(e){}
+    return html;
+  };
+
+  // v20 会在渲染后重写 hero-stat 的 DOM，因此排名优先的 pill 也必须在 bindPage 阶段直接改 DOM
+  function applyRankPillV28(){
+    if(state.page!=='home')return;
+    var card=document.querySelector('.hero-stat');
+    if(!card)return;
+    var label=card.querySelector('.stat-label');
+    if(!label||label.textContent.indexOf('总分')<0)return; // 单科视图保持原样
+    var rd=rankDeltaV28();
+    if(!rd)return;
+    var pill=card.querySelector('.trend-pill');
+    if(!pill){pill=document.createElement('span');pill.className='trend-pill';card.appendChild(pill);}
+    var up=rd.delta>0; // 名次数字变小 = 前进
+    if(rd.delta===0){pill.textContent='→ 较上次 '+rd.label+' 持平';}
+    else{pill.textContent=(up?'↗':'↘')+' 较上次 '+rd.label+' '+(up?'↑':'↓')+Math.abs(rd.delta)+' 名';}
+  }
+
+  // ---------- 3. 记录页：市排徽章 ----------
+  var recordHtmlBeforeV28=(typeof recordHtml==='function')?recordHtml:null;
+  if(recordHtmlBeforeV28){
+    recordHtml=function recordHtmlV28(exam){
+      var html=recordHtmlBeforeV28(exam);
+      try{
+        var city=rankInfoByScopeV16(exam,'总分','city');
+        if(city.rank!==null){
+          var badge='<span class="score-tag"><b>市排 '+city.rank+(city.participants?' / '+city.participants:'')+'</b></span>';
+          html=html.replace('</div><div class="record-actions',badge+'</div><div class="record-actions');
+        }
+      }catch(e){}
+      return html;
+    };
+  }
+
+  // ---------- 4. 考试弹窗：市排录入 ----------
+  function decorateModalV28(exam,modal){
+    if(!modal)return;
+    var total=modal.querySelector('.total-ranks-v16');
+    if(total&&!modal.querySelector('#totalCityRankV28')){
+      var card=document.createElement('div');
+      card.className='rank-scope-card-v16';
+      card.innerHTML='<b>市级排名</b><div class="rank-pair-v16"><div><label>名次</label><input id="totalCityRankV28" inputmode="numeric" pattern="[0-9]*" value="'+escapeHtml(exam&&exam.total_city_rank!=null?exam.total_city_rank:'')+'" placeholder="可留空"></div><div><label>参考人数</label><input id="totalCityParticipantsV28" inputmode="numeric" pattern="[0-9]*" value="'+escapeHtml(exam&&exam.total_city_participants!=null?exam.total_city_participants:'')+'" placeholder="如 12000"></div></div>';
+      total.appendChild(card);
+    }
+    decorateCardsV28(exam,modal);
+    if(!modal._v28Observer&&typeof MutationObserver!=='undefined'){
+      modal._v28Observer=new MutationObserver(function(){if(modal.isConnected)decorateCardsV28(exam,modal);});
+      modal._v28Observer.observe(modal,{childList:true,subtree:true});
+    }
+  }
+
+  function decorateCardsV28(exam,modal){
+    modal.querySelectorAll('.exam-subject-card-v10').forEach(function(card){
+      if(card.dataset.v28City)return;
+      card.dataset.v28City='1';
+      var ranks=card.querySelector('.subject-ranks-v16');
+      if(!ranks)return;
+      var nameEl=card.querySelector('.exam-subject-name-v10');
+      var name=nameEl?nameEl.value.trim():'';
+      var row=exam&&exam.scores&&exam.scores[name]||{};
+      var div=document.createElement('div');
+      div.className='subject-rank-row-v16';
+      div.innerHTML='<span>市排</span><input class="city-rank-v28" inputmode="numeric" pattern="[0-9]*" value="'+escapeHtml(row.cityRank!=null?row.cityRank:'')+'" placeholder="名次"><input class="city-participants-v28" inputmode="numeric" pattern="[0-9]*" value="'+escapeHtml(row.cityParticipants!=null?row.cityParticipants:'')+'" placeholder="参考人数">';
+      ranks.appendChild(div);
+    });
+  }
+
+  var openExamBeforeV28=(typeof openExam==='function')?openExam:null;
+  if(openExamBeforeV28){
+    openExam=function openExamV28(exam){
+      openExamBeforeV28(exam);
+      if(state.modal)decorateModalV28(exam&&exam.id?exam:null,state.modal);
+    };
+  }
+
+  // ---------- 5. dataApiV7：市排保存合并 + 删除备份/撤销 ----------
+  function readTrashV28(){
+    try{var raw=localStorage.getItem(TRASH_KEY_V28);var arr=raw?JSON.parse(raw):[];return Array.isArray(arr)?arr:[];}catch(e){return[];}
+  }
+  function writeTrashV28(arr){
+    try{localStorage.setItem(TRASH_KEY_V28,JSON.stringify(arr.slice(0,10)));}catch(e){}
+  }
+
+  function showUndoV28(examName,backup,entryAt){
+    var old=document.getElementById('v28Undo');
+    if(old&&old.parentNode)old.parentNode.removeChild(old);
+    var bar=document.createElement('div');
+    bar.className='v28-undo';
+    bar.id='v28Undo';
+    bar.innerHTML='<span>已删除「'+escapeHtml(examName)+'」，成绩已在本机留档</span><button type="button">撤销</button>';
+    var timer=setTimeout(function(){if(bar.parentNode)bar.parentNode.removeChild(bar);},8000);
+    bar.querySelector('button').onclick=async function(){
+      clearTimeout(timer);
+      if(bar.parentNode)bar.parentNode.removeChild(bar);
+      try{
+        await dataApiV7OrigV28('save_exam',{exam:Object.assign({},backup,{id:null})});
+        var trashNow=readTrashV28();
+        var idx=trashNow.findIndex(function(t){return t.at===entryAt;});
+        if(idx>=0){trashNow.splice(idx,1);writeTrashV28(trashNow);}
+        await loadExams();render();
+        toast('已撤销删除，考试已恢复');
+      }catch(e){toast('恢复失败：'+e.message);}
+    };
+    document.body.appendChild(bar);
+  }
+
+  var dataApiV7OrigV28=dataApiV7;
+  dataApiV7=async function dataApiV28(action,payload){
+    payload=payload||{};
+    if(action==='save_exam'&&state.modal&&state.modal.isConnected&&state.modal.querySelector('#totalCityRankV28')){
+      try{
+        var exam=payload.exam||{};
+        var modal=state.modal;
+        exam.total_city_rank=modal.querySelector('#totalCityRankV28').value||'';
+        exam.total_city_participants=modal.querySelector('#totalCityParticipantsV28').value||'';
+        exam.scores=exam.scores||{};
+        modal.querySelectorAll('.exam-subject-card-v10').forEach(function(card){
+          var nameEl=card.querySelector('.exam-subject-name-v10');
+          var name=nameEl?nameEl.value.trim():'';
+          if(!name||!exam.scores[name])return;
+          var cr=card.querySelector('.city-rank-v28'),cp=card.querySelector('.city-participants-v28');
+          exam.scores[name].cityRank=cr?cr.value:'';
+          exam.scores[name].cityParticipants=cp?cp.value:'';
+        });
+      }catch(e){}
+    }
+    if(action==='delete_exam'){
+      var examId=payload.examId;
+      var target=null;
+      (state.exams||[]).forEach(function(e){if(String(e.id)===String(examId))target=e;});
+      var res=await dataApiV7OrigV28(action,payload);
+      if(target){
+        var entryAt=Date.now();
+        var trash=readTrashV28();
+        trash.unshift({exam:target,at:entryAt});
+        writeTrashV28(trash);
+        showUndoV28(target.name||'这次考试',target,entryAt);
+      }
+      return res;
+    }
+    return dataApiV7OrigV28(action,payload);
+  };
+
+  // ---------- 6. 选科省略 ----------
+  function loadSelectionV28(){
+    try{var raw=localStorage.getItem(SEL_KEY_V28);var arr=raw?JSON.parse(raw):null;return Array.isArray(arr)&&arr.length?arr:null;}catch(e){return null;}
+  }
+
+  function trashCardHtmlV28(){
+    var trash=readTrashV28();
+    var items=trash.length?trash.map(function(item,i){
+      var e=item.exam||{};
+      return '<div class="v28-trash-item"><div><b>'+escapeHtml(e.name||'未命名考试')+'</b><span>'+escapeHtml(fmtYearDate?fmtYearDate(e.exam_date):(e.exam_date||''))+' 删除于 '+new Date(item.at).toLocaleString('zh-CN')+'</span></div><div class="v28-trash-btns"><button type="button" class="v28-restore" data-v28-restore="'+i+'">恢复</button><button type="button" class="v28-purge" data-v28-purge="'+i+'">彻底清除</button></div></div>';
+    }).join(''):'<p class="v28-note" style="margin-top:10px">回收站是空的。删除考试时会自动在这里留档（本机最多 10 条），误删可一键恢复。</p>';
+    return '<div class="card v28-card"><div class="card-title-row"><div><h3 class="card-title">回收站 · 删除保护</h3><p class="card-sub">删除考试前自动在本机留档，防止误触丢失数据；恢复会把整场考试（含成绩与排名）重新写回云端。</p></div></div>'+items+'</div>';
+  }
+
+  function subjectCardHtmlV28(){
+    var sel=loadSelectionV28()||[];
+    var pool=(state.subjectConfigs&&state.subjectConfigs.length?state.subjectConfigs.map(function(x){return x.name;}):SUBJECTS.slice());
+    var chips=pool.map(function(name){
+      var on=!sel.length||sel.indexOf(name)>=0;
+      return '<button type="button" class="'+(on?'on':'')+'" data-v28-sub="'+escapeHtml(name)+'">'+escapeHtml(name)+'</button>';
+    }).join('');
+    return '<div class="card v28-card"><div class="card-title-row"><div><h3 class="card-title">我的选科</h3><p class="card-sub">敲定选科后，首页趋势图的科目按钮只保留所选科目，界面更清爽；历史数据不受影响。</p></div></div><div class="v28-sub-list" id="v28SubList">'+chips+'</div><div class="v28-actions"><button type="button" class="primary" id="v28SubSave">保存选科</button><button type="button" class="secondary" id="v28SubClear">显示全部科目</button></div><p class="v28-note">不勾选任何科目 = 未设置，显示全部。设置只保存在这台设备上。</p></div>';
+  }
+
+  var accountHtmlBeforeV28=(typeof accountHtml==='function')?accountHtml:null;
+  if(accountHtmlBeforeV28){
+    accountHtml=function accountHtmlV28(){
+      return accountHtmlBeforeV28()+subjectCardHtmlV28()+trashCardHtmlV28();
+    };
+  }
+
+  var bindPageBeforeV28=(typeof bindPage==='function')?bindPage:null;
+  bindPage=function bindPageV28(){
+    if(bindPageBeforeV28)bindPageBeforeV28();
+    try{applySubjectFilterV28();}catch(e){}
+    try{applyRankPillV28();}catch(e){}
+    try{bindAccountV28();}catch(e){}
+  };
+
+  function applySubjectFilterV28(){
+    if(state.page!=='home')return;
+    var rows=document.querySelectorAll('.combo-chips-v25');
+    var chipsWrap=rows.length?rows[rows.length-1]:document.querySelector('.chips');
+    if(!chipsWrap)return;
+    var sel=loadSelectionV28();
+    if(!sel||SHOW_ALL_V28){
+      ensureShowAllBtnV28(chipsWrap,false);
+      return;
+    }
+    var keep={};keep['总览']=1;keep['总分']=1;sel.forEach(function(s){keep[s]=1;});
+    (state.modulesV18||[]).forEach(function(m){if(m&&m.name)keep[m.name]=1;});
+    var hidden=false,subjectInvalid=false;
+    document.querySelectorAll('.combo-chips-v25 [data-subject], .chips [data-subject]').forEach(function(b){
+      var s=b.getAttribute('data-subject');
+      var show=!!keep[s];
+      b.style.display=show?'':'none';
+      if(!show){hidden=true;if(state.subject===s){state.subject='总分';subjectInvalid=true;}}
+    });
+    ensureShowAllBtnV28(chipsWrap,hidden);
+    if(subjectInvalid)render();
+  }
+
+  function ensureShowAllBtnV28(chipsWrap,hidden){
+    var btn=document.getElementById('v28ShowAll');
+    if(!hidden){
+      if(btn&&btn.parentNode)btn.parentNode.removeChild(btn);
+      return;
+    }
+    if(btn||!hidden)return;
+    btn=document.createElement('button');
+    btn.className='chip';
+    btn.id='v28ShowAll';
+    btn.textContent='＋其余科目';
+    btn.onclick=function(){SHOW_ALL_V28=true;render();};
+    chipsWrap.appendChild(btn);
+  }
+
+  function bindAccountV28(){
+    if(state.page!=='account')return;
+    var list=document.getElementById('v28SubList');
+    if(list){
+      list.querySelectorAll('[data-v28-sub]').forEach(function(b){
+        b.onclick=function(){b.classList.toggle('on');};
+      });
+    }
+    var save=document.getElementById('v28SubSave');
+    if(save){
+      save.onclick=function(){
+        var chosen=[];
+        var listNow=document.getElementById('v28SubList');
+        if(listNow)listNow.querySelectorAll('[data-v28-sub].on').forEach(function(b){chosen.push(b.getAttribute('data-v28-sub'));});
+        try{localStorage.setItem(SEL_KEY_V28,JSON.stringify(chosen));}catch(e){}
+        SHOW_ALL_V28=false;
+        render();
+        toast(chosen.length?'选科已保存，首页只显示所选科目':'已恢复显示全部科目');
+      };
+    }
+    var clear=document.getElementById('v28SubClear');
+    if(clear){
+      clear.onclick=function(){
+        try{localStorage.removeItem(SEL_KEY_V28);}catch(e){}
+        SHOW_ALL_V28=false;
+        render();
+        toast('已恢复显示全部科目');
+      };
+    }
+    document.querySelectorAll('[data-v28-restore]').forEach(function(b){
+      b.onclick=async function(){
+        var trash=readTrashV28();
+        var item=trash[Number(b.getAttribute('data-v28-restore'))];
+        if(!item)return;
+        try{
+          await dataApiV7OrigV28('save_exam',{exam:Object.assign({},item.exam,{id:null})});
+          trash.splice(Number(b.getAttribute('data-v28-restore')),1);
+          writeTrashV28(trash);
+          await loadExams();render();
+          toast('已恢复「'+(item.exam.name||'考试')+'」');
+        }catch(e){toast('恢复失败：'+e.message);}
+      };
+    });
+    document.querySelectorAll('[data-v28-purge]').forEach(function(b){
+      b.onclick=function(){
+        var trash=readTrashV28();
+        trash.splice(Number(b.getAttribute('data-v28-purge')),1);
+        writeTrashV28(trash);
+        render();
+        toast('已从回收站清除');
+      };
+    });
+  }
+
+  syncVersionV28();
+})();
+;

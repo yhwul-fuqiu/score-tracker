@@ -5319,21 +5319,28 @@ saveExam=async function saveExamV21(id,modal){
   rankScopeLongLabelV16=function(scope){return scope==='city'?'市级排名':rankScopeLongLabelBeforeV28(scope);};
 
   // ---------- 2. 首页：市排按钮 + 排名优先 pill ----------
-  function rankDeltaV28(){
+  function rankMetricV28(exam,subject,scope){
+    var info=rankInfoByScopeV16(exam,subject,scope);
+    if(info.rank!==null)return{kind:'rank',value:info.rank};
+    if(info.directPercent&&info.positionPercent!==null)return{kind:'percent',value:Number(info.positionPercent)};
+    return null;
+  }
+  function rankDeltaV28(subject){
+    subject=subject||'总分';
     var exams=(state.exams||[]).filter(function(e){return !e.is_hidden;}).slice().sort(function(a,b){return String(a.exam_date).localeCompare(String(b.exam_date));});
     var scopes=['year','class','city'];
     for(var i=0;i<scopes.length;i++){
-      var lastRank=null,prevRank=null,lastIdx=-1;
+      var last=null,prev=null,lastIdx=-1;
       for(var j=exams.length-1;j>=0;j--){
-        var info=rankInfoByScopeV16(exams[j],'总分',scopes[i]);
-        if(info.rank!==null){
-          if(lastRank===null){lastRank=info.rank;lastIdx=j;}
-          else if(j<lastIdx){prevRank=info.rank;break;}
+        var m=rankMetricV28(exams[j],subject,scopes[i]);
+        if(m){
+          if(last===null){last=m;lastIdx=j;}
+          else if(j<lastIdx){prev=m;break;}
         }
       }
-      if(lastRank!==null&&prevRank!==null){
-        var d=prevRank-lastRank; // 负数=名次前进
-        return{scope:scopes[i],delta:d,label:rankScopeLabelV16(scopes[i])};
+      if(last&&prev&&last.kind===prev.kind){
+        var d=prev.value-last.value; // 正数 = 位次前进（名次变小 / 位比缩小）
+        return{scope:scopes[i],kind:last.kind,delta:d,label:rankScopeLabelV16(scopes[i])+(last.kind==='percent'?'位比':''),lastValue:last.value};
       }
     }
     return null;
@@ -5352,20 +5359,63 @@ saveExam=async function saveExamV21(id,modal){
     return html;
   };
 
-  // v20 会在渲染后重写 hero-stat 的 DOM，因此排名优先的 pill 也必须在 bindPage 阶段直接改 DOM
+  // v20 会在渲染后重写 hero-stat 的 DOM，因此排名优先的 pill 也必须在 bindPage 阶段直接改 DOM。
+  // 高考录取看位次不看分数：有排名/位比就比位次；没有就引导补填，绝不退回分数对比。
   function applyRankPillV28(){
     if(state.page!=='home')return;
     var card=document.querySelector('.hero-stat');
     if(!card)return;
     var label=card.querySelector('.stat-label');
-    if(!label||label.textContent.indexOf('总分')<0)return; // 单科视图保持原样
-    var rd=rankDeltaV28();
-    if(!rd)return;
+    if(!label)return;
+    var lt=String(label.textContent||'');
+    var subject=null;
+    if(lt.indexOf('总分')>=0)subject='总分';
+    else{var m=lt.match(/^最近一次(.+?)成绩$/);if(m)subject=m[1];}
+    if(!subject)return;
+    decorateRankPillV28(card,subject);
+  }
+
+  function latestRankTextV28(subject){
+    subject=subject||'总分';
+    var exams=(state.exams||[]).filter(function(e){return !e.is_hidden;}).sort(function(a,b){return String(b.exam_date).localeCompare(String(a.exam_date));});
+    var e=exams[0];if(!e)return'';
+    var parts=[];
+    var yr=rankInfoByScopeV16(e,subject,'year');
+    if(yr.rank!==null)parts.push('年排 '+yr.rank+(yr.participants?'/'+yr.participants:''));
+    else if(yr.directPercent&&yr.positionPercent!==null)parts.push('年位比 前'+Number(yr.positionPercent).toFixed(1)+'%');
+    if(subject==='总分'){
+      var ct=rankInfoByScopeV16(e,'总分','city');
+      if(ct.rank!==null)parts.push('市排 '+ct.rank+(ct.participants?'/'+ct.participants:''));
+    }
+    return parts.join(' · ');
+  }
+
+  function decorateRankPillV28(card,subject){
+    var sub=card.querySelector('.stat-sub');
+    if(sub){
+      if(sub.dataset.v28Base===undefined)sub.dataset.v28Base=sub.textContent;
+      var suffix=latestRankTextV28(subject);
+      sub.textContent=sub.dataset.v28Base+(suffix?' · '+suffix:'');
+    }
+    var rd=rankDeltaV28(subject);
     var pill=card.querySelector('.trend-pill');
     if(!pill){pill=document.createElement('span');pill.className='trend-pill';card.appendChild(pill);}
-    var up=rd.delta>0; // 名次数字变小 = 前进
-    if(rd.delta===0){pill.textContent='→ 较上次 '+rd.label+' 持平';}
-    else{pill.textContent=(up?'↗':'↘')+' 较上次 '+rd.label+' '+(up?'↑':'↓')+Math.abs(rd.delta)+' 名';}
+    pill.onclick=null;pill.style.cursor='';pill.classList.remove('v28-nudge');
+    if(rd){
+      var up=rd.delta>0;
+      if(rd.delta===0)pill.textContent='→ 较上次 '+rd.label+' 持平';
+      else if(rd.kind==='percent')pill.textContent=(up?'↗':'↘')+' 较上次 '+rd.label+' '+(up?'缩小':'扩大')+Math.abs(rd.delta).toFixed(1)+'%';
+      else pill.textContent=(up?'↗':'↘')+' 较上次 '+rd.label+' '+(up?'↑':'↓')+Math.abs(rd.delta)+' 名';
+      return;
+    }
+    pill.textContent='✎ 补填排名，高考录取看位次不看分数';
+    pill.classList.add('v28-nudge');
+    pill.style.cursor='pointer';
+    pill.title='点击打开最近一次考试，补填排名';
+    pill.onclick=function(){
+      var exams=(state.exams||[]).filter(function(e){return !e.is_hidden;}).sort(function(a,b){return String(b.exam_date).localeCompare(String(a.exam_date));});
+      if(exams[0])openExam(exams[0]);
+    };
   }
 
   // ---------- 3. 记录页：市排徽章 ----------
@@ -5625,5 +5675,335 @@ saveExam=async function saveExamV21(id,modal){
   }
 
   syncVersionV28();
+})();
+;
+
+/* ===== app-v29.js ===== */
+// app-v29 / product v3.3: 排名优先强化 + 成绩单图片识别。
+// 1) 趋势图默认切「名次」视图（仅当本会话未手动选过且至少两场考试有排名数据）。
+// 2) 考试弹窗新增「识别成绩单」：本地 OCR（Tesseract.js，中文语言包随项目分发在 /ocr 目录，
+//    图片不上传、不依赖第三方语言包 CDN），自动填入各科分数与排名，核对后保存。
+// 识别启发式：每行「科目 分数 年排 年人数 班排 班人数」依次取数；总分行同理填总排名；
+// 表格型成绩单（一行科目名 + 下一行纯数字）按顺序配对。识别结果仅供参考，保存前请核对。
+(function(){
+  var PRODUCT_VERSION_V29='v3.3';
+
+  function syncVersionV29(){
+    var meta=document.querySelector('meta[name="application-version"]');
+    if(meta)meta.setAttribute('content',PRODUCT_VERSION_V29);
+    var footer=document.getElementById('app-version-v17');
+    if(footer)footer.textContent='Score Tracker · '+PRODUCT_VERSION_V29;
+  }
+
+  if(typeof document!=='undefined'&&!document.getElementById('app-v29-style')){
+    var styleV29=document.createElement('style');
+    styleV29.id='app-v29-style';
+    styleV29.textContent=`
+      .trend-pill.v28-nudge{background:#f1f3f9;color:#4d5a6b}
+      #v29OcrBtn{font-weight:650}
+    `;
+    document.head.appendChild(styleV29);
+  }
+
+  // ---------- 1) 趋势图默认名次 ----------
+  var trendTouchedV29=false;
+  document.addEventListener('click',function(ev){
+    var t=ev.target;
+    var b=t&&t.closest?t.closest('[data-trend-metric]'):null;
+    if(b)trendTouchedV29=true;
+  },true);
+
+  function maybeDefaultRankV29(){
+    if(trendTouchedV29||state.trendMetric!=='score')return;
+    var ranked=0;
+    (state.exams||[]).forEach(function(e){
+      if(num(e.total_rank)!==null||num(e.total_class_rank)!==null||num(e.total_city_rank)!==null||num(e.total_year_position_percent)!==null)ranked++;
+    });
+    if(ranked>=2)state.trendMetric='rank_raw';
+  }
+  if(typeof loadExams==='function'){
+    var loadExamsBeforeV29=loadExams;
+    loadExams=async function loadExamsV29(){
+      var r=await loadExamsBeforeV29();
+      maybeDefaultRankV29();
+      return r;
+    };
+  }
+
+  // ---------- 2) OCR：引擎加载（本地 ocr/ 目录优先，CDN 兜底） ----------
+  function ocrBaseV29(){return location.href.replace(/[^\/]*$/,'')+'ocr/';}
+  var SCRIPT_URLS_V29=null;
+  function scriptUrlsV29(){
+    if(SCRIPT_URLS_V29)return SCRIPT_URLS_V29;
+    var b=ocrBaseV29();
+    SCRIPT_URLS_V29=[
+      b+'tesseract.min.js',
+      'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js',
+      'https://registry.npmmirror.com/tesseract.js/5.1.1/files/dist/tesseract.min.js'
+    ];
+    return SCRIPT_URLS_V29;
+  }
+  function loadCodeV29(src){
+    return fetch(src,{cache:'force-cache'}).then(function(r){
+      if(!r.ok)throw new Error('http '+r.status);
+      return r.text();
+    }).then(function(code){
+      (0,eval)(code);
+    });
+  }
+  var tessPromiseV29=null;
+  function ensureTesseractV29(){
+    if(window.Tesseract)return Promise.resolve();
+    if(!tessPromiseV29){
+      tessPromiseV29=(async function(){
+        var urls=scriptUrlsV29();
+        for(var i=0;i<urls.length;i++){
+          try{await loadCodeV29(urls[i]);if(window.Tesseract)return;}catch(e){}
+        }
+        tessPromiseV29=null;
+        throw new Error('OCR 引擎加载失败，请检查网络后重试');
+      })();
+    }
+    return tessPromiseV29;
+  }
+  function ocrConfigsV29(){
+    var b=ocrBaseV29();
+    return [
+      {workerPath:b+'worker.min.js',corePath:b+'core/'},
+      {}
+    ];
+  }
+
+  // ---------- OCR：图片预处理 ----------
+  function prepareImageV29(file){
+    return new Promise(function(res){
+      var url=URL.createObjectURL(file);
+      var img=new Image();
+      img.onload=function(){
+        var maxW=1600,w=img.width,h=img.height;
+        if(w>maxW){h=Math.round(h*maxW/w);w=maxW;}
+        var c=document.createElement('canvas');
+        c.width=w;c.height=h;
+        c.getContext('2d').drawImage(img,0,0,w,h);
+        URL.revokeObjectURL(url);
+        res(c);
+      };
+      img.onerror=function(){URL.revokeObjectURL(url);res(null);};
+      img.src=url;
+    });
+  }
+
+  // ---------- OCR：解析 ----------
+  var SUBJECT_ALIASES_V29=[
+    ['思想政治','政治'],['西班牙语','西班牙语'],
+    ['语文','语文'],['数学','数学'],['英语','英语'],['英文','英语'],
+    ['物理','物理'],['化学','化学'],['生物','生物'],['政治','政治'],
+    ['历史','历史'],['地理','地理'],['体育','体育'],['听力','听力'],
+    ['日语','日语'],['俄语','俄语'],['法语','法语'],['德语','德语'],
+    ['总分','总分']
+  ];
+  function matchSubjectV29(line){
+    var best=null;
+    for(var i=0;i<SUBJECT_ALIASES_V29.length;i++){
+      var alias=SUBJECT_ALIASES_V29[i];
+      var idx=line.indexOf(alias[0]);
+      if(idx>=0&&(!best||alias[0].length>best.alias.length))best={alias:alias[0],name:alias[1],idx:idx};
+    }
+    return best;
+  }
+  function numsInV29(s){return (String(s).match(/\d+(?:\.\d+)?/g)||[]).map(Number);}
+
+  // 行内关键词标记（年排/班排/市排）优先于位置推断：命中即摘出，避免市排数字被误当班排
+  function extractMarkersV29(rest){
+    var out={rest:String(rest),yearRank:null,classRank:null,cityRank:null};
+    var m=out.rest.match(/(?:年|校|级)(?:级)?(?:排|排名|名次)\D{0,3}(\d+)/);
+    if(m){out.yearRank=m[1];out.rest=out.rest.replace(m[0],' ');}
+    m=out.rest.match(/班(?:级)?(?:排|排名|名次)\D{0,3}(\d+)/);
+    if(m){out.classRank=m[1];out.rest=out.rest.replace(m[0],' ');}
+    m=out.rest.match(/市(?:级)?(?:排|排名|名次)\D{0,3}(\d+)/);
+    if(m){out.cityRank=m[1];out.rest=out.rest.replace(m[0],' ');}
+    return out;
+  }
+
+  function parseReportV29(text){
+    var lines=String(text||'').split(/\r?\n/);
+    var rows={},total=null,seq=null;
+    for(var i=0;i<lines.length;i++){
+      var line=lines[i]||'';
+      if(!line.trim())continue;
+      var hit=matchSubjectV29(line);
+      if(hit){
+        var rest=line.slice(hit.idx+hit.alias.length);
+        var mk=extractMarkersV29(rest);
+        var nums=numsInV29(mk.rest);
+        if(nums.length||mk.yearRank||mk.classRank||mk.cityRank){
+          if(hit.name==='总分'){
+            if(!total)total={nums:nums,line:line,cityRank:mk.cityRank,classRank:mk.classRank};
+          }else if(!rows[hit.name]){
+            rows[hit.name]={nums:nums,yearRank:mk.yearRank,classRank:mk.classRank,cityRank:mk.cityRank};
+          }
+          continue;
+        }
+        // 本行只有科目名（可能多个）：与下方纯数字行配对（表格型成绩单）
+        var names=[],scan=line,j=0;
+        while(j<40){
+          var m=matchSubjectV29(scan);
+          if(!m)break;
+          names.push(m.name==='英语'&&m.alias==='英文'?'英语':m.name);
+          scan=scan.slice(m.idx+m.alias.length);
+          j++;
+        }
+        var next=lines[i+1]||'';
+        var hasChinese=/[\u4e00-\u9fa5]/.test(next.replace(/[年月日排位名次分]/g,''));
+        var nextNums=numsInV29(next);
+        if(names.length>=2&&!hasChinese&&nextNums.length>=names.length){
+          var third=lines[i+2]||'';
+          var thirdChinese=/[\u4e00-\u9fa5]/.test(third.replace(/[年月日排位名次分]/g,''));
+          var thirdNums=!thirdChinese?numsInV29(third):[];
+          // 布局一：科目行 / 分数行 / 名次行（三行）
+          if(nextNums.length===names.length&&thirdNums.length===names.length){
+            seq={names:names,pairs:names.map(function(_,k){return[nextNums[k],thirdNums[k]];})};
+            i+=2;
+          }else if(nextNums.length===names.length){
+            // 布局二：科目行 / 分数行（两行，只有分数）
+            seq={names:names,pairs:names.map(function(_,k){return[nextNums[k]];})};
+            i++;
+          }else if(nextNums.length===names.length*2){
+            // 布局三：科目行 / 「分数 名次 分数 名次…」交错一行
+            seq={names:names,pairs:names.map(function(_,k){return[nextNums[k*2],nextNums[k*2+1]];})};
+            i++;
+          }
+        }
+        continue;
+      }
+    }
+    if(seq){
+      seq.names.forEach(function(name,k){
+        if(name==='总分'){if(!total)total={nums:seq.pairs[k]||[],line:'',cityRank:null,classRank:null};return;}
+        if(!rows[name]){
+          var group=seq.pairs[k]||[];
+          if(group.length)rows[name]={nums:group,yearRank:null,classRank:null,cityRank:null};
+        }
+      });
+    }
+    return {rows:rows,total:total};
+  }
+
+  // ---------- OCR：填表 ----------
+  function setValV29(input,v){
+    if(!input||v===undefined||v===null)return false;
+    input.value=String(v);
+    try{input.dispatchEvent(new Event('input',{bubbles:true}));}catch(e){}
+    return true;
+  }
+  function findCardV29(modal,name){
+    var found=null;
+    modal.querySelectorAll('.exam-subject-card-v10').forEach(function(card){
+      var el=card.querySelector('.exam-subject-name-v10');
+      if(el&&el.value.trim()===name)found=card;
+    });
+    return found;
+  }
+  function addCardV29(modal){
+    var btn=modal.querySelector('#addExamSubjectV16')||modal.querySelector('#addExamSubjectV14');
+    if(!btn)return null;
+    btn.click();
+    var cards=modal.querySelectorAll('.exam-subject-card-v10');
+    return cards[cards.length-1];
+  }
+  function applyParsedV29(modal,parsed){
+    var filled=[];
+    Object.keys(parsed.rows).forEach(function(name){
+      var row=parsed.rows[name];
+      var nums=row.nums;
+      var card=findCardV29(modal,name);
+      if(!card){card=addCardV29(modal);if(card)setValV29(card.querySelector('.exam-subject-name-v10'),name);}
+      if(!card)return;
+      setValV29(card.querySelector('.actual-v16'),nums[0]);
+      setValV29(card.querySelector('.year-rank-v16'),row.yearRank!==null&&row.yearRank!==undefined?row.yearRank:nums[1]);
+      setValV29(card.querySelector('.year-participants-v16'),row.yearRank!=null?nums[1]:nums[2]);
+      setValV29(card.querySelector('.class-rank-v16'),row.classRank!==null&&row.classRank!==undefined?row.classRank:nums[3]);
+      setValV29(card.querySelector('.city-rank-v28'),row.cityRank);
+      filled.push(name+' '+(nums[0]!==undefined?nums[0]:'—')+(row.yearRank!=null||nums[1]!==undefined?'·年排'+(row.yearRank!=null?row.yearRank:nums[1]):''));
+    });
+    var sawRank=false;
+    if(parsed.total){
+      var t=parsed.total.nums;
+      setValV29(modal.querySelector('.total-actual-override-v24'),t[0]);
+      setValV29(modal.querySelector('#totalRankV16'),t[1]);
+      setValV29(modal.querySelector('#totalParticipantsV16'),t[2]);
+      setValV29(modal.querySelector('#totalClassRankV16'),parsed.total.classRank!=null?parsed.total.classRank:t[3]);
+      setValV29(modal.querySelector('#totalClassParticipantsV16'),t[4]);
+      if(parsed.total.cityRank!=null)setValV29(modal.querySelector('#totalCityRankV28'),parsed.total.cityRank);
+      if(t[1]!==undefined||parsed.total.cityRank!=null)sawRank=true;
+    }
+    Object.keys(parsed.rows).forEach(function(n){
+      var r=parsed.rows[n];
+      if(r.yearRank!=null||r.cityRank!=null||r.classRank!=null||r.nums[1]!==undefined)sawRank=true;
+    });
+    if(sawRank){
+      var modeBtn=modal.querySelector('[data-entry-mode-v17="rank"]');
+      if(modeBtn&&modal.dataset.rankEntryModeV17!=='rank')modeBtn.click();
+    }
+    return filled;
+  }
+
+  // ---------- OCR：主流程 ----------
+  async function runOcrV29(file,modal,btn){
+    var orig=btn.textContent;
+    btn.disabled=true;btn.textContent='识别中…';
+    try{
+      await ensureTesseractV29();
+      var canvas=await prepareImageV29(file);
+      if(!canvas)throw new Error('图片读取失败');
+      var result=null,lastErr=null;
+      var configs=ocrConfigsV29();
+      for(var ci=0;ci<configs.length&&!result;ci++){
+        try{
+          result=await window.Tesseract.recognize(canvas,'chi_sim',Object.assign({
+            langPath:ocrBaseV29(),
+            gzip:true,
+            logger:function(m){
+              if(m&&m.status==='recognizing text'&&m.progress!=null)btn.textContent='识别中 '+Math.round(m.progress*100)+'%';
+            }
+          },configs[ci]));
+        }catch(e){lastErr=e;}
+      }
+      if(!result)throw lastErr||new Error('识别失败');
+      var text=result&&result.data&&result.data.text?result.data.text:'';
+      var parsed=parseReportV29(text);
+      var filled=applyParsedV29(modal,parsed);
+      if(!filled.length)toast('没认出科目和分数，请换更清晰的成绩单截图（含科目名与数字）');
+      else toast('已填入 '+filled.length+' 科：'+filled.slice(0,3).join('，')+(filled.length>3?'…':'')+'，请核对后保存');
+    }catch(e){
+      toast(e.message||'识别失败，请重试');
+    }
+    btn.disabled=false;btn.textContent=orig;
+  }
+
+  var openExamBeforeV29=(typeof openExam==='function')?openExam:null;
+  if(openExamBeforeV29){
+    openExam=function openExamV29(exam){
+      openExamBeforeV29(exam);
+      var modal=state.modal;
+      if(!modal||modal.querySelector('#v29OcrBtn'))return;
+      var toolbar=modal.querySelector('.exam-subject-toolbar-v10');
+      if(!toolbar)return;
+      var btn=document.createElement('button');
+      btn.type='button';btn.id='v29OcrBtn';btn.className='secondary';
+      btn.textContent='识别成绩单（拍照 / 截图自动填）';
+      var file=document.createElement('input');
+      file.type='file';file.accept='image/*';file.style.display='none';
+      file.onchange=function(){
+        if(file.files&&file.files[0])runOcrV29(file.files[0],modal,btn);
+        file.value='';
+      };
+      btn.onclick=function(){file.click();};
+      toolbar.insertBefore(btn,toolbar.firstChild);
+      modal.appendChild(file);
+    };
+  }
+
+  syncVersionV29();
 })();
 ;
